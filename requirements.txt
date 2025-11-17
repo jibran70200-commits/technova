@@ -3,3 +3,4 @@ cryptography
 pandas
 scikit-learn
 numpy
+networkx
