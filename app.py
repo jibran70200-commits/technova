@@ -1,6 +1,8 @@
 import streamlit as st
 import time
 import pandas as pd
+import networkx as nx
+from pyvis.network import Network
 from cryptography.fernet import Fernet
 from sklearn.ensemble import IsolationForest
 
@@ -8,16 +10,14 @@ from sklearn.ensemble import IsolationForest
 # INITIAL SETUP
 # -------------------------------------------------------------------
 
-st.set_page_config(page_title="TechNova Security Simulation", layout="wide")
+st.set_page_config(page_title="TechNova Security System", layout="wide")
 
-# Branches
 BRANCHES = ["Mumbai-HQ", "Bengaluru", "Hyderabad", "Pune-DR"]
 
-# Encryption (AES simulation using Fernet = AES128 + HMAC)
 FERNET_KEY = Fernet.generate_key()
 fernet = Fernet(FERNET_KEY)
 
-# Central logs
+# Central logs stored in session
 if "logs" not in st.session_state:
     st.session_state.logs = []
 
@@ -52,19 +52,16 @@ def run_anomaly_detection():
     if df.empty:
         return pd.DataFrame(), "No logs available."
 
-    # Encode actions numerically
     df["action_code"] = df["action"].astype("category").cat.codes
 
     if len(df) < 5:
         return pd.DataFrame(), "Not enough logs for model."
 
-    try:
-        model = IsolationForest(contamination=0.15, random_state=42)
-        df["anomaly"] = model.fit_predict(df[["size_bytes", "action_code"]])
-        anomalies = df[df["anomaly"] == -1]
-        return anomalies, f"Anomalies found: {len(anomalies)}"
-    except:
-        return pd.DataFrame(), "AI analysis failed — insufficient data."
+    model = IsolationForest(contamination=0.15, random_state=42)
+    df["anomaly"] = model.fit_predict(df[["size_bytes","action_code"]])
+    anomalies = df[df["anomaly"] == -1]
+
+    return anomalies, f"Anomalies found: {len(anomalies)}"
 
 def simulate_attack(target, pps=50, duration=3):
     count = 0
@@ -75,82 +72,157 @@ def simulate_attack(target, pps=50, duration=3):
 
 
 # -------------------------------------------------------------------
+# NETWORK GRAPH GENERATOR
+# -------------------------------------------------------------------
+
+def generate_network_graph():
+
+    df = get_logs_df()
+    G = nx.DiGraph()
+
+    # Add branch nodes
+    for b in BRANCHES:
+        G.add_node(b)
+
+    # Build edges from logs
+    for _, row in df.iterrows():
+        src = row["src"]
+        dst = row["dst"]
+
+        # skip attacker self-nodes
+        if src == "Attacker":
+            G.add_node("Attacker")
+        
+        # Weight edges by number of messages
+        if G.has_edge(src, dst):
+            G[src][dst]["weight"] += 1
+        else:
+            G.add_edge(src, dst, weight=1)
+
+    # PyVis graph
+    net = Network(
+        height="600px",
+        width="100%",
+        directed=True,
+        bgcolor="#111111",
+        font_color="white"
+    )
+
+    net.barnes_hut()
+
+    # Add nodes visually
+    for node in G.nodes():
+        color = "#00c3ff" if node in BRANCHES else "#ff4444"
+        net.add_node(node, label=node, color=color)
+
+    # Add edges visually
+    for src, dst, data in G.edges(data=True):
+        width = min(data["weight"] * 0.8, 8)
+        color = "#4fd1c5"  # aqua
+        if src == "Attacker":
+            color = "#ff4444"
+        net.add_edge(src, dst, value=data["weight"], color=color, width=width)
+
+    net.save_graph("network_graph.html")
+
+    # Load HTML into Streamlit
+    with open("network_graph.html", "r", encoding="utf-8") as f:
+        html = f.read()
+
+    return html
+
+
+# -------------------------------------------------------------------
 # STREAMLIT UI
 # -------------------------------------------------------------------
 
-st.title("🔐 TechNova — Branch-to-Branch Data Security Simulation")
+st.title("🔐 TechNova — Data Security Simulation (with Live Network Graph)")
 
-tab1, tab2, tab3, tab4 = st.tabs(["📤 Encrypted Transfer", "📊 SOC Logs", "🤖 AI Threat Analysis", "⚠️ Attack Simulation"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "📤 Encrypted Transfer",
+    "📊 SOC Logs",
+    "🤖 AI Threat Analysis",
+    "⚠️ Attack Simulation",
+    "🌐 Live Network Graph"
+])
 
 
 # -------------------------------------------------------------------
 # TAB 1: ENCRYPTED TRANSFER
 # -------------------------------------------------------------------
 with tab1:
-    st.subheader("📤 Send Encrypted Message Between Branches")
+    st.subheader("📤 Send Encrypted Data")
 
     col1, col2 = st.columns(2)
-    with col1:
-        src = st.selectbox("Source Branch", BRANCHES)
-    with col2:
-        dst = st.selectbox("Destination Branch", BRANCHES)
+    src = col1.selectbox("Source Branch", BRANCHES)
+    dst = col2.selectbox("Destination Branch", BRANCHES)
 
-    message = st.text_area("Enter message", "Confidential payroll file FY-2025")
+    message = st.text_area("Message", "Confidential payroll - FY 2025")
 
-    if st.button("Encrypt & Send", use_container_width=True):
+    if st.button("Encrypt & Send"):
         token = encrypt_message(message)
         size = len(token)
 
         add_log(src, dst, size, "encrypted_transfer", "success")
 
-        st.success("Encrypted transfer sent successfully!")
+        st.success("Encrypted data sent successfully!")
         st.code(token.decode())
 
-    st.info("AES-style encryption is simulated using Fernet (AES128 + HMAC).")
+    st.info("Using AES-128 style encryption via Fernet (AES-CBC + HMAC).")
 
 
 # -------------------------------------------------------------------
 # TAB 2: VIEW LOGS
 # -------------------------------------------------------------------
 with tab2:
-    st.subheader("📊 Central SOC Logs")
+    st.subheader("📊 Security Operations Center Logs")
 
     df = get_logs_df()
-    st.dataframe(df, use_container_width=True, height=500)
+    st.dataframe(df, height=500, use_container_width=True)
 
-    if st.button("Clear Logs ❌", use_container_width=True):
+    if st.button("Clear Logs"):
         st.session_state.logs = []
-        st.warning("All logs cleared.")
+        st.warning("Logs cleared.")
 
 
 # -------------------------------------------------------------------
-# TAB 3: AI ANOMALY DETECTION
+# TAB 3: AI ANALYSIS
 # -------------------------------------------------------------------
 with tab3:
-    st.subheader("🤖 AI-Based Threat Analysis")
+    st.subheader("🤖 AI-Powered Threat Detection")
 
     anomalies, msg = run_anomaly_detection()
     st.info(msg)
 
     if not anomalies.empty:
-        st.error("⚠️ Threats Detected in Network Traffic")
-        st.dataframe(anomalies, use_container_width=True)
+        st.error("⚠️ Anomalies Found!")
+        st.dataframe(anomalies, height=400, use_container_width=True)
     else:
-        st.success("No anomalies detected.")
+        st.success("No suspicious activity detected.")
 
 
 # -------------------------------------------------------------------
 # TAB 4: ATTACK SIMULATION
 # -------------------------------------------------------------------
 with tab4:
-    st.subheader("⚠️ Simulate Flood / DoS Attack")
+    st.subheader("⚠️ Simulate a DoS Attack")
 
     target = st.selectbox("Target Branch", BRANCHES)
-    pps = st.slider("Packets per second", 10, 200, 60)
-    duration = st.slider("Attack Duration (seconds)", 1, 10, 4)
+    pps = st.slider("Packets per second", 10, 200, 50)
+    duration = st.slider("Duration (seconds)", 1, 10, 3)
 
-    if st.button("Launch Attack 🚨", use_container_width=True):
+    if st.button("Launch Attack 🚨"):
         count = simulate_attack(target, pps, duration)
-        st.error(f"Attack simulated! {count} malicious packets added to logs.")
+        st.error(f"{count} malicious packets generated (simulated)!")
 
-    st.caption("Use this to test anomaly detection system.")
+
+# -------------------------------------------------------------------
+# TAB 5: LIVE NETWORK GRAPH
+# -------------------------------------------------------------------
+with tab5:
+    st.subheader("🌐 Real-Time Network Graph")
+
+    html = generate_network_graph()
+    st.components.v1.html(html, height=600, scrolling=True)
+
+    st.caption("Graph updates on every message/attack to show live traffic patterns.")
